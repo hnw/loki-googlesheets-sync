@@ -732,25 +732,25 @@ const TimestampUtil_ = {
         // UTCナノ秒にオフセットを加算して、指定タイムゾーンでのナノ秒タイムスタンプ（擬似ローカルタイム）を得る
         const localNanoTs = utcNanoTs + offsetNano;
 
-        // ナノ秒タイムスタンプをミリ秒部分とナノ秒部分に分割
-        const localMsTs = localNanoTs / BigInt(1000000);
-        const nanoPart = Number(localNanoTs % BigInt(1000000)); // Numberにしないとゼロ埋めできない
+        const NANO_PER_SECOND = BigInt(1000000000);
+        const localSecTs = localNanoTs / NANO_PER_SECOND; // 秒部分 (BigInt)
+        const nanoFraction = localNanoTs % NANO_PER_SECOND; // 秒未満のナノ秒部分 (0-999,999,999)
 
-        // ミリ秒部分からDateオブジェクトを生成 (UTCとして扱う)
-        const date = new Date(Number(localMsTs)); // DateコンストラクタはNumberを要求
+        // 秒部分をミリ秒に変換してDateオブジェクトを生成
+        const localMsTsForDate = localSecTs * BigInt(1000);
+        const date = new Date(Number(localMsTsForDate));
 
-        // DateオブジェクトのUTC系メソッドで日付と時刻要素を取得
-        const year = date.getUTCFullYear();
-        const month = (date.getUTCMonth() + 1).toString().padStart(2, '0');
-        const day = date.getUTCDate().toString().padStart(2, '0');
-        const hour = date.getUTCHours().toString().padStart(2, '0');
-        const minute = date.getUTCMinutes().toString().padStart(2, '0');
-        const second = date.getUTCSeconds().toString().padStart(2, '0');
-        const nanoseconds = nanoPart.toString().padStart(9, '0'); // 9桁ゼロ埋め
+        // toISOString() を利用して日付・時刻部分を取得
+        const isoString = date.toISOString(); // 例: "2025-04-30T10:55:00.000Z"
+
+        // "YYYY-MM-DDTHH:mm:ss" の部分を取得 (小数点"."の手前まで)
+        const dateTimePart = isoString.slice(0, isoString.indexOf('.')); // "."の位置で区切る
+
+        // ナノ秒部分
+        const nanosecondsString = nanoFraction.toString().padStart(9, '0');
 
         // 文字列を組み立て
-        const dateTimePart = `${year}-${month}-${day}T${hour}:${minute}:${second}.${nanoseconds}`;
-        return `${dateTimePart}${offsetString}`;
+        return `${dateTimePart}.${nanosecondsString}${offsetString}`;
     } catch (e) {
         Logger.log(`Error formatting nano timestamp ${utcNanoTs} with offset ${offsetString}: ${e}`);
         return `[Timestamp format error: ${utcNanoTs}]`; // エラーを示す文字列
