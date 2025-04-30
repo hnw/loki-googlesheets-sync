@@ -25,7 +25,7 @@ const IGNORED_SHEET_PREFIX = '_';
 const TIMESTAMP_COLUMN_NAME = '_timestamp'; // Lokiのタイムスタンプキーに合わせて変更が必要な場合あり
 
 /** 初回実行時に遡る時間 (秒) */
-const INITIAL_LOOKBACK_SEC = 60 * 60 // 1時間
+const INITIAL_LOOKBACK_SECONDS = 60 * 60 // 1時間
 
 /** 許可されるmetric_nameの文字種 (正規表現) */
 const ALLOWED_METRIC_NAME_REGEX = /^[a-zA-Z0-9_-]+$/;
@@ -51,11 +51,12 @@ function main() {
   Logger.log(`最新処理タイムスタンプ (UTCナノ秒): ${lastProcessedNanoTs}`);
 
   // 2. Lokiクエリの時間範囲を決定
-  const { startNanoTs, endNanoTs } = calculateLokiTimeRange_(lastProcessedNanoTs, config.overlapSeconds);
-  Logger.log(`Lokiクエリ時間範囲 (UTCナノ秒): start=${startNanoTs}, end=${endNanoTs}`);
+  const lastProcessedSeconds = Math.floor(Number(lastProcessedNanoTs / BigInt(1000000000)))
+  const { startSeconds, endSeconds } = calculateLokiTimeRange_(lastProcessedSeconds, config.overlapSeconds);
+  Logger.log(`Lokiクエリ時間範囲 (UTCナノ秒): start=${startSeconds}000000000, end=${endSeconds}000000000`);
 
   // 3. Lokiからログを取得
-  const lokiLogs = fetchLogsFromLoki_(config, startNanoTs, endNanoTs);
+  const lokiLogs = fetchLogsFromLoki_(config, startSeconds, endSeconds);
   if (!lokiLogs) {
     Logger.log('Lokiからのログ取得に失敗したか、ログがありませんでした。');
     return;
@@ -234,51 +235,42 @@ function writeToSheet_(sheet, dataToWrite) {
 // --- Loki API 関連 ---
 
 /**
- * Lokiクエリの時間範囲 (UTCナノ秒) を計算する
- * @param {BigInt|null} lastProcessedNanoTs - 最新処理タイムスタンプ (UTCナノ秒)
+ * Lokiクエリの時間範囲 (unix秒) を計算する
+ * @param {number|null} lastProcessedSeconds - 最新処理タイムスタンプ (unix秒)
  * @param {number} overlapSeconds - Overlap秒数
- * @returns {{startNanoTs: BigInt, endNanoTs: BigInt}} クエリの開始・終了時刻 (UTCナノ秒)
+ * @returns {{startSeconds: number, endSeconds: number}} クエリの開始・終了時刻 (unix秒)
  */
-function calculateLokiTimeRange_(lastProcessedNanoTs, overlapSeconds) {
-    const nowNanoTs = BigInt(Date.now()) * BigInt(1000000); // 現在時刻 (UTCナノ秒)
-    let startNanoTs;
+function calculateLokiTimeRange_(lastProcessedSeconds, overlapSeconds) {
+    const nowSeconds = Math.floor(Date.now() / 1000); // 現在時刻 (unix秒)
+    let startSeconds = nowSeconds - INITIAL_LOOKBACK_SECONDS;
 
-    if (lastProcessedNanoTs !== null) {
-        const overlapNano = BigInt(overlapSeconds) * BigInt(1000000000);
-        // lastProcessedNanoTs - overlapNano がクエリの開始時刻
-        startNanoTs = lastProcessedNanoTs - overlapNano;
-        // ただし、取得漏れを防ぐため、厳密には lastProcessedNanoTs より *後* のログを取得したいので、
-        // +1 ナノ秒を加算して、次の取得の開始点とするのが一般的。
-        // 今回の重複排除ロジックでは Overlap 期間を含めて取得するため、減算で良い。
-        // startNanoTs = lastProcessedNanoTs - overlapNano + BigInt(1); // 代替案
-    } else {
-        // 初回実行時: 1時間前から現在まで
-        const lookbackNano = BigInt(INITIAL_LOOKBACK_SEC) * BigInt(1000000000);
-        startNanoTs = nowNanoTs - lookbackNano;
+    if (lastProcessedSeconds !== null && lastProcessedSeconds > nowSeconds - INITIAL_LOOKBACK_SECONDS) {
+        // 最後のログが1時間以内なら、最後のログを起点にログを検索する
+        startSeconds = lastProcessedSeconds - overlapSeconds;
     }
 
     // end は指定しない (Lokiサーバーの現在時刻まで)
     // APIによっては end を指定する必要があるかもしれないが、Lokiは省略可能
-    const endNanoTs = nowNanoTs; // 参考情報として返す
+    const endSeconds = nowSeconds; // 参考情報として返す
 
-    return { startNanoTs, endNanoTs };
+    return { startSeconds, endSeconds };
 }
 
 /**
  * Loki API からログを取得する
  * @param {object} config - 設定オブジェクト
- * @param {BigInt} startNanoTs - クエリ開始時刻 (UTCナノ秒)
- * @param {BigInt} endNanoTs - クエリ終了時刻 (UTCナノ秒、Loki APIでは通常 end は省略可能)
+ * @param {number} startSeconds - クエリ開始時刻 (unix秒)
+ * @param {number} endSeconds - クエリ終了時刻 (unix秒、Loki APIでは通常 end は省略可能)
  * @returns {Array<object>|null} Lokiログの配列。失敗時はnull
  */
-function fetchLogsFromLoki_(config, startNanoTs, endNanoTs) {
+function fetchLogsFromLoki_(config, startSeconds, endSeconds) {
   // LogQLクエリの構築
   // end は指定しない例
   const query = encodeURIComponent(`${config.baseQuery}`);
   const url = `${config.lokiApiEndpoint}/loki/api/v1/query_range` +
               `?query=${query}` +
-              `&start=${startNanoTs}` +
-              // `&end=${endNanoTs}` + // 通常 end は省略可能
+              `&start=${startSeconds}000000000` +
+              // `&end=${endSeconds}000000000` + // 通常 end は省略可能
               `&limit=${config.queryLimit}` +
               `&direction=forward`; // 古いものから取得
 
